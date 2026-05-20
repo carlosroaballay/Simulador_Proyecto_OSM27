@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from fastapi import FastAPI, Request
 import uvicorn
 from pymodbus.server import StartAsyncTcpServer
@@ -26,26 +27,27 @@ async def motor_matematico(contexto, estado_global):
         esclavo.setValues(2, 10064, [1 if estado_global.alarma_general else 0])
         esclavo.setValues(2, 10118, [1 if estado_global.warning else 0])
 
-        # --- 2. ESCRITURA DE REGISTROS DE ENTRADA (Función 4) ---
-        # Corrientes 
-        esclavo.setValues(4, 30001, [int(estado_global.ia)])
-        esclavo.setValues(4, 30002, [int(estado_global.ib)])
-        esclavo.setValues(4, 30003, [int(estado_global.ic)])
+        # 2. ESCRITURA DE REGISTROS DE ENTRADA (Función 4) con AWGN ---
         
-        # Tensiones de Fase 
-        esclavo.setValues(4, 30005, [int(estado_global.ua)])
-        esclavo.setValues(4, 30006, [int(estado_global.ub)])
-        esclavo.setValues(4, 30007, [int(estado_global.uc)])
+        # Corrientes (1.5% de ruido)
+        esclavo.setValues(4, 30001, [int(random.gauss(estado_global.ia, 0.015 * estado_global.ia))])
+        esclavo.setValues(4, 30002, [int(random.gauss(estado_global.ib, 0.015 * estado_global.ib))])
+        esclavo.setValues(4, 30003, [int(random.gauss(estado_global.ic, 0.015 * estado_global.ic))])
+        
+        # Tensiones de Fase (1.5% de ruido)
+        esclavo.setValues(4, 30005, [int(random.gauss(estado_global.ua, 0.015 * estado_global.ua))])
+        esclavo.setValues(4, 30006, [int(random.gauss(estado_global.ub, 0.015 * estado_global.ub))])
+        esclavo.setValues(4, 30007, [int(random.gauss(estado_global.uc, 0.015 * estado_global.uc))])
 
-        # Tensiones de Línea 
-        esclavo.setValues(4, 30011, [int(estado_global.uab)])
-        esclavo.setValues(4, 30012, [int(estado_global.ubc)])
-        esclavo.setValues(4, 30013, [int(estado_global.uca)])
+        # Tensiones de Línea (Podemos hacerlas dependientes o simplemente aplicarles ruido)
+        esclavo.setValues(4, 30011, [int(random.gauss(estado_global.uab, 0.015 * estado_global.uab))])
+        esclavo.setValues(4, 30012, [int(random.gauss(estado_global.ubc, 0.015 * estado_global.ubc))])
+        esclavo.setValues(4, 30013, [int(random.gauss(estado_global.uca, 0.015 * estado_global.uca))])
 
         # Potencias 
-        esclavo.setValues(4, 30026, [int(estado_global.kva_total)])
-        esclavo.setValues(4, 30027, [int(estado_global.kvar_total)])
-        esclavo.setValues(4, 30028, [int(estado_global.kw_total)])
+        esclavo.setValues(4, 30026, [int(random.gauss(estado_global.kva_total, 0.01 * estado_global.kva_total))])
+        esclavo.setValues(4, 30027, [int(random.gauss(estado_global.kvar_total, 0.01 * estado_global.kvar_total))])
+        esclavo.setValues(4, 30028, [int(random.gauss(estado_global.kw_total, 0.01 * estado_global.kw_total))])
 
         # Factor de potencia (x1000 según manual hipotético / x0.001 en cliente) 
         esclavo.setValues(4, 30068, [int(estado_global.factor_potencia * 1000)])

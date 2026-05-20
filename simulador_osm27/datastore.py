@@ -1,13 +1,10 @@
-from pymodbus.datastore import ModbusSparseDataBlock, ModbusSlaveContext, ModbusServerContext
+from pymodbus.datastore import ModbusSparseDataBlock, ModbusDeviceContext, ModbusServerContext
 
 def inicializar_memoria_noja() -> ModbusServerContext:
     """
     Construye el mapa de memoria Modbus con bloques dispersos 
     para Discrete Inputs (1xxxx) e Input Registers (3xxxx).
     """
-    # Mapa de Discrete Inputs (1xxxx) - Estado lógico (1 bit)
-    # 10035: Open All, 10075: Closed All, 10001: Lockout
-    # 10010: Pickup, 10036: Open Prot, 10064: Alarma, 10118: Warning
     diccionario_di = {
         10001: 0,
         10010: 0,
@@ -18,18 +15,12 @@ def inicializar_memoria_noja() -> ModbusServerContext:
         10118: 0
     }
 
-    # Mapa de Input Registers (3xxxx) - Magnitudes (16 bits)
-    # Tensiones de Fase: 30005, 30006, 30007
-    # Tensiones de Línea: 30011, 30012, 30013
-    # Corrientes: 30001, 30002, 30003
-    # Potencias: 30026 (S), 30027 (Q), 30028 (P)
-    # FP: 30068 | Freq: 30061 | Contador: 30072
     diccionario_ir = {
         30001: 0, 30002: 0, 30003: 0,
         30005: 0, 30006: 0, 30007: 0,
         30011: 0, 30012: 0, 30013: 0,
         30026: 0, 30027: 0, 30028: 0,
-        30043: 0, 30044: 0,  # Energía Reactiva (Hi/Lo 32 bits)
+        30043: 0, 30044: 0,  
         30061: 0,
         30068: 0,
         30072: 0
@@ -38,8 +29,11 @@ def inicializar_memoria_noja() -> ModbusServerContext:
     bloque_di = ModbusSparseDataBlock(diccionario_di)
     bloque_ir = ModbusSparseDataBlock(diccionario_ir)
     
-    slave_context = ModbusSlaveContext(
-        di=bloque_di, co=None, hr=None, ir=bloque_ir, zero_mode=False
+    # APLICAMOS EL ESTÁNDAR MODERNO: ModbusDeviceContext (antes SlaveContext)
+    device_context = ModbusDeviceContext(
+        di=bloque_di, co=None, hr=None, ir=bloque_ir
     )
     
-    return ModbusServerContext(slaves=slave_context, single=True)
+    # Mantenemos el "slaves=" por compatibilidad con la firma de la función interna
+    # Pasamos device_context sin la palabra reservada 'slaves='
+    return ModbusServerContext(device_context, single=True)
