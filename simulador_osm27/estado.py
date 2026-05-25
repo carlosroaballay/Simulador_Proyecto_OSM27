@@ -1,130 +1,82 @@
 import time
-import math
 from datetime import datetime
 
 class EstadoSimulador:
-    """
-    Memoria compartida (Single Source of Truth) del equipo OSM27.
-    Contiene los valores físicos y lógicos en tiempo real.
-    """
     def __init__(self):
-        # --- Tensiones de Fase y Línea (V) ---
-        self.ua = 13200
-        self.ub = 13200
-        self.uc = 13200
-        self.uab = 22860
-        self.ubc = 22860
-        self.uca = 22860
+        # Nominales y Físicos
+        self.v_fase_nom = 13200
+        self.i_nom = 105
+        self.fp_carga = 0.95
+        self.carga_actual = 1.0
         
-        # --- Corrientes (A) ---
-        self.ia = 150
-        self.ib = 150
-        self.ic = 150
-        
-        # --- Potencias y Factor de Potencia ---
-        self.kw_total = 3000
-        self.kvar_total = 500
-        self.kva_total = 3041
-        self.factor_potencia = 0.98  # Se escalará x1000 para Modbus
-        
-        # --- Frecuencia y Energía ---
-        self.frecuencia = 50.0  # Se escalará x100 para Modbus
-        self.energia_activa_acumulada = 0  # kWh (Cálculo por software)
-        self.energia_reactiva_acumulada = 0 # kVArh
-        
-        # --- Estados Lógicos (Discrete Inputs) ---
-        self.estado_cerrado = True
-        self.estado_abierto = False
-        self.bloqueo_lockout = False
-        self.alarma_general = False
-        self.warning = False
-        self.pickup = False
-        self.open_prot = False
-        
-        # --- Contadores ---
-        self.operaciones_totales = 150
-
+        # Máquina de Estados (ANSI 79)
         self.estado_fsm = "CERRADO"
         self.tiempo_apertura = 0.0
         self.intentos = 0
         self.max_intentos = 3
         self.dead_time = 5.0
         
-        # Flags inyectables desde FastAPI
-        self.falla_permanente = False 
+        # Flags de Inyección
+        self.falla_permanente = False
+        self.falla_transitoria = False
+        self.falla_tension = False # Hueco de tensión (Sag)
         
-    def procesar_ciclo(self):
-        """
-        Esta función se ejecuta a 1 Hz. Representa 1 paso de simulación.
-        """
-        t_actual = time.time()
-        hora_actual = datetime.now().hour # Devuelve un entero de 0 a 23
+        # Telemetría Modbus
+        self.pickup = False
+        self.open_prot = False
+        self.bloqueo_lockout = False
+        self.alarma_general = False
+        self.alarma_tension = False
+        self.operaciones_totales = 150
+        self.energia_activa_acumulada = 100000.0
+        self.energia_reactiva_acumulada = 25000.0
         
-        # ==============================================================
-        # BLOQUE 1: DEPENDENCIA TEMPORAL (Perfil de Carga AM)
-        # ==============================================================
-        # Por defecto, supongamos una carga media del 70%
-        multiplicador_carga = 0.7 
-        
-        if hora_actual in [13, 14, 20, 21, 22]: # Rango de horas pico
-            multiplicador_carga = 1.0
-        elif 2 <= hora_actual <= 5:             # Rango de madrugada
-            multiplicador_carga = 0.4
-            
-        self.ia = self.ib = self.ic = int(150 * multiplicador_carga)
+        # Cola interna de eventos
+        self.eventos_pendientes = []
 
-        # ==============================================================
-        # BLOQUE 2: MÁQUINA DE ESTADOS (ANSI 79)
-        # ==============================================================
+    def log_evento(self, mensaje):
+        self.eventos_pendientes.append(mensaje)
+
+    def procesar_ciclo(self):
+        t_actual = time.time()
+        
+        # 1. PERFIL DE CARGA (Curva AM)
+        hora = datetime.now().hour
+        self.carga_actual = 1.0 if hora in [13, 14, 20, 21, 22] else (0.4 if 2 <= hora <= 5 else 0.7)
+        
+        # 2. MÁQUINA DE ESTADOS (ANSI 79)
         if self.estado_fsm == "CERRADO":
-            if self.falla_permanente:
+            if self.falla_permanente or self.falla_transitoria:
                 self.estado_fsm = "ESPERA"
+                self.pickup = True
+                self.open_prot = True
                 self.tiempo_apertura = t_actual
+                self.operaciones_totales += 1
+                self.log_evento(f"⚠️ DISPARO: Sobrecorriente. Abriendo contactos. (Op: {self.operaciones_totales})")
+            else:
+                self.intentos = 0
+                self.pickup = False
+                
         elif self.estado_fsm == "ESPERA":
-            delta = t_actual - self.tiempo_apertura
-            if delta >= self.dead_time:
+            if t_actual - self.tiempo_apertura >= self.dead_time:
                 self.intentos += 1
                 if self.intentos >= self.max_intentos:
                     self.estado_fsm = "BLOQUEO"
+                    self.bloqueo_lockout = True
+                    self.alarma_general = True
+                    self.log_evento("❌ BLOQUEO (Lockout): Intentos agotados. Falla permanente en la línea.")
                 else:
-                    if self.falla_permanente:
-                        self.tiempo_apertura = t_actual
-                    else:
-                        self.estado_fsm = "CERRADO"
-                        self.intentos = 0
-        
-        # ==============================================================
-        # BLOQUE 3: FÍSICA Y ENERGÍA (Procesamiento de Señales)
-        # ==============================================================
-        if self.estado_fsm == "CERRADO":
-            # 1. Asumimos un factor de potencia que varía ligeramente con la carga
-            # A más carga, FP más bajo (motores industriales)
-            self.factor_potencia = 0.98 if multiplicador_carga < 0.8 else 0.85
-            
-            # 2. Potencia Aparente S (VA) = sqrt(3) * V_linea * I_linea
-            s_va = 1.732 * self.uab * self.ia
-            self.kva_total = int(s_va / 1000) # Convertimos a kVA
-            
-            # 3. Potencias Activa P (kW) y Reactiva Q (kVAr)
-            sin_phi = math.sin(math.acos(self.factor_potencia))
-            self.kw_total = int(self.kva_total * self.factor_potencia)
-            self.kvar_total = int(self.kva_total * sin_phi)
-            
-            # 4. Integración de Energía (Euler-Forward simple)
-            # P [kW] / 3600 segundos te da la porción de kWh de este segundo
-            self.energia_activa_acumulada += (self.kw_total / 3600.0)
-            self.energia_reactiva_acumulada += (self.kvar_total / 3600.0)
-            
-            # 5. Actualizamos los flags de Modbus
-            self.estado_cerrado = True
-            self.estado_abierto = False
-            self.bloqueo_lockout = False
-        else:
-            # En ESPERA o BLOQUEO, es un circuito abierto (I = 0)
-            self.ia = self.ib = self.ic = 0
-            self.kw_total = self.kvar_total = self.kva_total = 0
-            
-            self.estado_cerrado = False
-            self.estado_abierto = True
-            if self.estado_fsm == "BLOQUEO":
-                self.bloqueo_lockout = True
+                    self.estado_fsm = "CERRADO"
+                    self.open_prot = False
+                    self.log_evento(f"🔄 REENGANCHE: Intento {self.intentos}/{self.max_intentos}. Cerrando contactos.")
+                    if self.falla_transitoria:
+                        self.falla_transitoria = False
+                        self.log_evento("✅ Falla transitoria despejada. Línea estabilizada.")
+                        
+        elif self.estado_fsm == "BLOQUEO":
+            if not self.falla_permanente and not self.falla_transitoria:
+                self.estado_fsm = "CERRADO"
+                self.bloqueo_lockout = False
+                self.alarma_general = False
+                self.intentos = 0
+                self.log_evento("🔧 RESET: Operario restableció el equipo. Línea Viva.")

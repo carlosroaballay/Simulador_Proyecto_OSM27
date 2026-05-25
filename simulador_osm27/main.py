@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import random
+import math
 import uvicorn
+import time
 from fastapi import FastAPI, Request
 from pymodbus.server import StartAsyncTcpServer
 from datastore import inicializar_memoria_noja
@@ -10,107 +12,123 @@ from estado import EstadoSimulador
 logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Panel de Control - Simulador OSM27")
+app = FastAPI(title="Simulador OSM27 Avanzado")
+cola_alertas = asyncio.Queue()
 
-async def motor_matematico(contexto, estado_global):
-    _logger.info("Motor matemático iniciado. Frecuencia: 1 Hz")
-    esclavo = contexto[0] 
-    
+async def worker_notificaciones():
     while True:
-        # 1. EL CEREBRO PIENSA (Actualiza FSM, Curva de Carga y Energía)
+        alerta = await cola_alertas.get()
+        _logger.warning(f"🚀 [ALERTA MULTICANAL DESPACHADA] -> {alerta}")
+        cola_alertas.task_done()
+
+# Función auxiliar de protección contra desbordamientos (Grado Industrial)
+def c16(valor):
+    return min(65535, max(0, int(valor)))
+
+async def motor_matematico(esclavo, estado_global):
+    _logger.info("Motor matemático iniciado. Frecuencia: 1 Hz")
+    while True:
         estado_global.procesar_ciclo()
         
-        # 2. CAPA FÍSICA: AGREGAMOS RUIDO AWGN SOLO SI HAY FLUJO DE CORRIENTE
+        while estado_global.eventos_pendientes:
+            await cola_alertas.put(estado_global.eventos_pendientes.pop(0))
+
+        # 1. CAPA FÍSICA (Tensiones y Corrientes con AWGN)
+        v_base = estado_global.v_fase_nom * (0.8 if estado_global.falla_tension else 1.0)
+        ua = int(random.gauss(v_base, 0.01 * v_base))
+        ub = int(random.gauss(v_base, 0.01 * v_base))
+        uc = int(random.gauss(v_base, 0.01 * v_base))
+        
+        # Tensiones de línea compuestas derivadas
+        uab = int(ua * 1.732)
+        ubc = int(ub * 1.732)
+        uca = int(uc * 1.732)
+
         if estado_global.estado_fsm == "CERRADO":
-            # 1.5% de ruido a la corriente y tensión
-            ia_ruido = int(random.gauss(estado_global.ia, 0.015 * estado_global.ia))
-            ib_ruido = int(random.gauss(estado_global.ib, 0.015 * estado_global.ib))
-            ic_ruido = int(random.gauss(estado_global.ic, 0.015 * estado_global.ic))
+            i_base = estado_global.i_nom * estado_global.carga_actual
+            if getattr(estado_global, 'pickup', False): 
+                i_base = 8000 # Corriente extrema de falla
             
-            ua_ruido = int(random.gauss(estado_global.ua, 0.015 * estado_global.ua))
-            ub_ruido = int(random.gauss(estado_global.ub, 0.015 * estado_global.ub))
-            uc_ruido = int(random.gauss(estado_global.uc, 0.015 * estado_global.uc))
+            ia = int(random.gauss(i_base, 0.015 * i_base))
+            ib = int(random.gauss(i_base, 0.015 * i_base))
+            ic = int(random.gauss(i_base, 0.015 * i_base))
+            
+            # --- POTENCIAS TRIFÁSICAS TOTALES REALES ---
+            kva_total = int(((ua * ia) + (ub * ib) + (uc * ic)) / 1000)
+            
+            fp_ruido = random.gauss(estado_global.fp_carga, 0.004)
+            fp_ruido = min(1.0, max(0.0, fp_ruido))
+            
+            kw_total = int(kva_total * fp_ruido)
+            kvar_total = int(kva_total * math.sin(math.acos(fp_ruido)))
+            
+            # Integración de Energía
+            estado_global.energia_activa_acumulada += (kw_total / 3600.0)
+            estado_global.energia_reactiva_acumulada += (kvar_total / 3600.0)
         else:
-            # En falla/espera la corriente es cero. 
-            # La tensión se mantiene estable aguas arriba del reconectador.
-            ia_ruido = ib_ruido = ic_ruido = 0
-            ua_ruido = int(estado_global.ua)
-            ub_ruido = int(estado_global.ub)
-            uc_ruido = int(estado_global.uc)
+            ia = ib = ic = 0
+            kva_total = kw_total = kvar_total = 0
+            fp_ruido = 0.0
 
-        # 3. ESCRITURA MODBUS: MAPA DE MEMORIA ESTRICTO
-        
-        # Entradas Discretas (Estados Lógicos - Función 2)
-        esclavo.setValues(2, 10075, [1 if estado_global.estado_cerrado else 0])
-        esclavo.setValues(2, 10035, [1 if estado_global.estado_abierto else 0])
-        esclavo.setValues(2, 10001, [1 if getattr(estado_global, 'bloqueo_lockout', False) else 0])
+        # Frecuencia normalizada (50 Hz con sutil jitter térmico)
+        frecuencia_ruido = int(random.gauss(50.0, 0.02) * 100)
 
-        # Registros de Entrada Analógicos (Función 4) - ¡Sin exceder 65535!
-        # Corrientes (A)
-        esclavo.setValues(4, 30001, [ia_ruido])
-        esclavo.setValues(4, 30002, [ib_ruido])
-        esclavo.setValues(4, 30003, [ic_ruido])
+        # 2. ESCRITURA SEGURA A CONTENEDOR MODBUS (Usando clamp c16)
+        esclavo.setValues(2, 10001, [1 if estado_global.bloqueo_lockout else 0])
+        esclavo.setValues(2, 10010, [1 if getattr(estado_global, 'pickup', False) else 0])
+        esclavo.setValues(2, 10035, [1 if estado_global.estado_fsm != "CERRADO" else 0])
+        esclavo.setValues(2, 10040, [1 if estado_global.alarma_tension else 0])
+        esclavo.setValues(2, 10064, [1 if estado_global.alarma_general else 0])
+        esclavo.setValues(2, 10075, [1 if estado_global.estado_fsm == "CERRADO" else 0])
         
-        # Tensiones de Fase (V)
-        esclavo.setValues(4, 30005, [ua_ruido])
-        esclavo.setValues(4, 30006, [ub_ruido])
-        esclavo.setValues(4, 30007, [uc_ruido])
+        esclavo.setValues(4, 30001, [c16(ia), c16(ib), c16(ic)])
+        esclavo.setValues(4, 30005, [c16(ua), c16(ub), c16(uc)])
+        esclavo.setValues(4, 30011, [c16(uab), c16(ubc), c16(uca)])
+        esclavo.setValues(4, 30026, [c16(kva_total), c16(kvar_total), c16(kw_total)])
         
-        # Potencias (kW, kVAr, kVA)
-        esclavo.setValues(4, 30026, [int(estado_global.kw_total)])
-        esclavo.setValues(4, 30027, [int(estado_global.kvar_total)])
-        esclavo.setValues(4, 30028, [int(estado_global.kva_total)])
+        # Energía Activa (32 bits mapeados en 30041 y 30042)
+        e_act = int(estado_global.energia_activa_acumulada)
+        esclavo.setValues(4, 30041, [(e_act >> 16) & 0xFFFF, e_act & 0xFFFF])
         
-        # Factor de Potencia (Escalado x1000 para enviar decimales, ej 980)
-        esclavo.setValues(4, 30068, [int(estado_global.factor_potencia * 1000)])
+        # Energía Reactiva (32 bits mapeados en 30043 y 30044)
+        e_react = int(estado_global.energia_reactiva_acumulada)
+        esclavo.setValues(4, 30043, [(e_react >> 16) & 0xFFFF, e_react & 0xFFFF])
         
-        # Energía y Contadores (Casteados a int)
-        esclavo.setValues(4, 30043, [int(estado_global.energia_activa_acumulada)])
-        esclavo.setValues(4, 30044, [int(estado_global.energia_reactiva_acumulada)])
-        esclavo.setValues(4, 30072, [estado_global.intentos]) # O el contador total
-        
-        # 4. Cedemos el procesador al Event Loop
+        esclavo.setValues(4, 30061, [c16(frecuencia_ruido)])
+        esclavo.setValues(4, 30068, [c16(fp_ruido * 1000)])
+        esclavo.setValues(4, 30075, [c16(estado_global.intentos)]) 
+
+        # --- RELOJ DEL EQUIPO (Holding Registers 40001-40002) ---
+        t_unix = int(time.time())
+        esclavo.setValues(3, 40001, [(t_unix >> 16) & 0xFFFF, t_unix & 0xFFFF])
+
         await asyncio.sleep(1)
 
-@app.post("/api/fallas/sobrecorriente/{estado_falla}")
-async def inyectar_falla(estado_falla: int, request: Request):
-    """
-    Endpoint para inyectar/limpiar una falla permanente. 1 = Activa, 0 = Normal.
-    """
-    estado_simulador = request.app.state.estado
-    activa = True if estado_falla == 1 else False
-    
-    # LA MAGIA DE LA ARQUITECTURA: 
-    # Solo cambiamos el "flag" lógico. La FSM hará el resto del trabajo.
-    estado_simulador.falla_permanente = activa
-    
-    estado_str = "inyectada" if activa else "limpiada"
-    return {
-        "status": "success", 
-        "message": f"Falla permanente {estado_str}. El reconectador evaluará la red."
-    }
+@app.post("/api/evento/{tipo}")
+async def inyectar_evento(tipo: str, request: Request):
+    estado = request.app.state.estado
+    if tipo == "transitoria": estado.falla_transitoria = True
+    elif tipo == "permanente": estado.falla_permanente = True
+    elif tipo == "sag": estado.falla_tension = True
+    elif tipo == "reset":
+        estado.falla_permanente = False
+        estado.falla_transitoria = False
+        estado.falla_tension = False
+    return {"status": "ok", "evento": tipo}
 
 async def main():
-    contexto_servidor = inicializar_memoria_noja()
+    contexto_servidor, esclavo_modbus = inicializar_memoria_noja()
     estado_global = EstadoSimulador()
-
     app.state.estado = estado_global
     
-    config_uvicorn = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
-    servidor_web = uvicorn.Server(config_uvicorn)
-    
-    # Puerto 502 ESTRICTO (Requiere Administrador/Root) 
-    servidor_modbus = StartAsyncTcpServer(
-        context=contexto_servidor,
-        address=("0.0.0.0", 502),
-    )
-    
-    _logger.info("Iniciando todos los subsistemas (FastAPI + Modbus TCP:502)...")
+    servidor_modbus = StartAsyncTcpServer(context=contexto_servidor, address=("0.0.0.0", 502))
+    config_uvicorn = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="error")
     
     await asyncio.gather(
         servidor_modbus,
-        servidor_web.serve(),
-        motor_matematico(contexto_servidor, estado_global)
+        uvicorn.Server(config_uvicorn).serve(),
+        motor_matematico(esclavo_modbus, estado_global),
+        worker_notificaciones() # Lanzamos el demonio de alertas
     )
 
 if __name__ == "__main__":
