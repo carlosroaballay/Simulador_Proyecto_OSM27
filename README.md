@@ -8,7 +8,7 @@ Este proyecto implementa un simulador físico y lógico del reconectador automá
 Bash:
 git clone https://github.com/pablogonzalezcontreras0-commits/Proyecto_OSM27.git
 
-//Moverse a la carpeta
+**//Moverse a la carpeta:**
 cd Proyecto_OSM27
 
 
