@@ -7,6 +7,7 @@ Este proyecto implementa un simulador físico y lógico del reconectador automá
 **1. Clonar el repositorio:**
 Bash:
 git clone https://github.com/pablogonzalezcontreras0-commits/Proyecto_OSM27.git
+
 //Moverse a la carpeta
 cd Proyecto_OSM27
 
