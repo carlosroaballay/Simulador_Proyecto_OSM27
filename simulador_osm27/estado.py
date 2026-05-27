@@ -1,4 +1,5 @@
 import time
+import random
 from datetime import datetime
 
 class EstadoSimulador:
@@ -20,6 +21,8 @@ class EstadoSimulador:
         self.falla_permanente = False
         self.falla_transitoria = False
         self.falla_tension = False # Hueco de tensión (Sag)
+        self.tiempo_inicio_sag = 0.0
+        self.duracion_sag = 0.0
         
         # Telemetría Modbus
         self.pickup = False
@@ -80,3 +83,23 @@ class EstadoSimulador:
                 self.alarma_general = False
                 self.intentos = 0
                 self.log_evento("🔧 RESET: Operario restableció el equipo. Línea Viva.")
+
+        # 3. INYECCIÓN DE SAG DE TENSIÓN (HUECO DE TENSIÓN)
+        if self.falla_tension:
+            # Si recién arranca el sag
+            if self.tiempo_inicio_sag == 0.0:
+                self.tiempo_inicio_sag = t_actual
+                # Simulamos la duración típica del arranque de un motor pesado (1 a 5 segundos)
+                self.duracion_sag = random.uniform(1.0, 5.0) 
+                self.alarma_tension = True
+                self.log_evento(f"⚡ ALARMA: Hueco de tensión (SAG) detectado. Motor arrancando...")
+            
+            # Chequeamos si ya pasó el tiempo de inrush
+            elif t_actual - self.tiempo_inicio_sag >= self.duracion_sag:
+                self.falla_tension = False
+                self.alarma_tension = False
+                self.tiempo_inicio_sag = 0.0
+                self.log_evento("✅ SAG superado. Tensión de red normalizada.")
+        else:
+            self.tiempo_inicio_sag = 0.0
+            self.alarma_tension = False

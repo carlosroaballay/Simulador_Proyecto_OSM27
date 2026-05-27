@@ -21,8 +21,9 @@ def dibujar_interfaz():
     sys.stdout.write('\033[H')
     sys.stdout.flush()
     
-    print(f"{CIAN}=== TELEMETRÍA SCADA INDUSTRIAL - NOJA OSM27 ==={RESET}".ljust(75))
-    print(f" RELOJ DEL CONTROLADOR RC10: {datos_ui['fecha_equipo']}".ljust(75))
+    # Agregamos \033[K al final de CADA línea para limpiar los "fantasmas"
+    print(f"{CIAN}=== TELEMETRÍA SCADA INDUSTRIAL - NOJA OSM27 ==={RESET}\033[K")
+    print(f" RELOJ DEL CONTROLADOR RC10: {datos_ui['fecha_equipo']}\033[K")
     
     led_c = f"{ROJO}⬤{RESET}" if datos_ui['cerrado'] else "◯" 
     led_a = f"{VERDE}⬤{RESET}" if datos_ui['abierto'] else "◯" 
@@ -31,20 +32,20 @@ def dibujar_interfaz():
     
     estado_tcp = f"{VERDE}ONLINE{RESET}" if conexion_activa else f"{ROJO}OFFLINE{RESET}"
     
-    print(f" RED MODBUS/TCP: {estado_tcp}".ljust(75))
-    print(f" ESTADOS: {led_c} CERRADO (Línea Viva)  {led_a} ABIERTO  {led_b} BLOQUEO  {led_s} SAG".ljust(85))
-    print("-----------------------------------------------------------------------------")
-    print(f" Ua: {datos_ui['ua']:>6.2f} kV | Ia: {datos_ui['ia']:>5d} A | P: {datos_ui['kw']:>5d} kW | FP: {datos_ui['fp']:.2f}")
-    print(f" Ub: {datos_ui['ub']:>6.2f} kV | Ib: {datos_ui['ib']:>5d} A | Q: {datos_ui['kvar']:>5d} kVAr | Hz: {datos_ui['frec']:.2f}")
-    print(f" Uc: {datos_ui['uc']:>6.2f} kV | Ic: {datos_ui['ic']:>5d} A | S: {datos_ui['kva']:>5d} kVA | AR: {datos_ui['intentos']}/{datos_ui['max_intentos']}")
-    print("-----------------------------------------------------------------------------")
-    print(f" ENERGÍA ACTIVA ACUMULADA:  {datos_ui['energia_act']:>8d} kWh".ljust(75))
-    print(f" ENERGÍA REACTIVA ACUMULADA: {datos_ui['energia_react']:>8d} kVARh".ljust(75))
-    print(f"{AMARILLO} ÚLTIMO EVENTO REGISTRADO: {datos_ui['msg']}{RESET}".ljust(90))
-    print(f"{CIAN}============================================================================={RESET}".ljust(75))
-    print(" [1] Inyectar Falla Transitoria  [2] Falla Permanente  [3] Inyectar Sag Tensión")
-    print(" [4] Simular Corte de Cable TCP [0] SCADA Reset/Clear [Q] Salir del Monitor")
-    print(" > Escriba un comando y presione ENTER: ", end="", flush=True)
+    print(f" RED MODBUS/TCP: {estado_tcp}\033[K")
+    print(f" ESTADOS: {led_c} CERRADO (Línea Viva)  {led_a} ABIERTO  {led_b} BLOQUEO  {led_s} SAG\033[K")
+    print("-----------------------------------------------------------------------------\033[K")
+    print(f" Ua: {datos_ui['ua']:>6.2f} kV | Ia: {datos_ui['ia']:>5d} A | P: {datos_ui['kw']:>5d} kW   | FP: {datos_ui['fp']:.2f}\033[K")
+    print(f" Ub: {datos_ui['ub']:>6.2f} kV | Ib: {datos_ui['ib']:>5d} A | Q: {datos_ui['kvar']:>5d} kVAr | Hz: {datos_ui['frec']:.2f}\033[K")
+    print(f" Uc: {datos_ui['uc']:>6.2f} kV | Ic: {datos_ui['ic']:>5d} A | S: {datos_ui['kva']:>5d} kVA  | AR: {datos_ui['intentos']}/3\033[K")
+    print("-----------------------------------------------------------------------------\033[K")
+    print(f" ENERGÍA ACTIVA ACUMULADA:   {datos_ui['energia_act']:>8d} kWh\033[K")
+    print(f" ENERGÍA REACTIVA ACUMULADA: {datos_ui['energia_react']:>8d} kVARh\033[K")
+    print(f"{AMARILLO} ÚLTIMO EVENTO REGISTRADO: {datos_ui['msg']}{RESET}\033[K")
+    print(f"{CIAN}============================================================================={RESET}\033[K")
+    print(" [1] Inyectar Falla Transitoria  [2] Falla Permanente  [3] Inyectar Sag Tensión\033[K")
+    print(" [4] Simular Corte de Cable TCP  [0] SCADA Reset/Clear [Q] Salir del Monitor\033[K")
+    print(" > Escriba un comando y presione ENTER: \033[K", end="", flush=True)
 
 async def tarea_modbus():
     cliente = AsyncModbusTcpClient('127.0.0.1', port=502)
@@ -72,7 +73,7 @@ async def tarea_modbus():
                 
                 r_time = await cliente.read_holding_registers(40001, 2, slave=1)
 
-                if not any(r.isError() for r in [r_blk, r_i, r_v, r_p, r_e1, r_e2, r_time]):
+                if not any(r.isError() for r in [r_blk, r_ab, r_sag, r_cer, r_i, r_v, r_p, r_frec, r_fp, r_e1, r_e2, r_time]):
                     datos_ui["bloqueo"] = r_blk.bits[0]
                     datos_ui["abierto"] = r_ab.bits[0]
                     datos_ui["sag"] = r_sag.bits[0]
