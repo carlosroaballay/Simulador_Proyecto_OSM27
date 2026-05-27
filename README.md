@@ -5,10 +5,11 @@ Este proyecto implementa un simulador físico y lógico del reconectador automá
 ## 🛠️ Instalación y Configuración
 
 **1. Clonar el repositorio:**
-\`\`\`bash
+Bash:
 git clone https://github.com/pablogonzalezcontreras0-commits/Proyecto_OSM27.git
+//Moverse a la carpeta
 cd Proyecto_OSM27
-\`\`\`
+
 
 **2. Crear el entorno virtual:**
 * En **Windows**: `python -m venv venv`
@@ -19,9 +20,8 @@ cd Proyecto_OSM27
 * En **Linux**: `source venv/bin/activate`
 
 **4. Instalar todas las dependencias:**
-\`\`\`bash
+Bash:
 pip install -r requirements.txt
-\`\`\`
 
 ---
 
@@ -37,11 +37,6 @@ El sistema consta de dos partes: el Servidor (Simulador) y el Cliente (SCADA). *
 Una vez que el servidor esté corriendo, abrí otra terminal, activá el entorno y ejecutá el cliente que prefieras:
 
 **SCADA Táctico de Consola (Interactividad total):**
-\`\`\`bash
+Bash:
 python cliente_interactivo.py
-\`\`\`
 
-**SCADA Gráfico (Qt5):**
-\`\`\`bash
-python app_cliente_qt/main_window.py
-\`\`\` 
